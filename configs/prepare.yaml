@@ -1,0 +1,39 @@
+# One-off dataset preparation: download CUB, then encode every image into the
+# shared SD 1.5 latent space.
+#
+#   python scripts/prepare_data.py
+#   python scripts/prepare_data.py resolutions=[256] overwrite=true
+#
+# NOTE: _self_ comes LAST so values written in *this* file override the config
+# groups above. With _self_ first, Hydra merges this file and then lets the
+# groups overwrite it -- which silently discarded every data.* override here.
+defaults:
+  - data: cub
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+# 256 feeds the from-scratch DiT, 512 feeds the SD 1.5 LoRA fine-tune.
+resolutions: [256, 512]
+
+# VAE encode batch. Backs off automatically on OOM, so this is a ceiling rather
+# than a number that has to be right -- 512px needs far less than 256px does.
+vae_batch_size: 16
+
+# bfloat16 costs -0.04 dB of reconstruction PSNR against fp32 (nothing: the two
+# decodes agree to 54 dB) at 1.8x the speed in half the VRAM. Latents are stored
+# as fp16 regardless, so fp32 precision here would be thrown away at write time.
+vae_dtype: bfloat16
+
+# JPEG decode + bicubic resize costs about as much as the VAE pass itself, so
+# overlap it with the GPU across worker processes.
+loader_workers: 8
+
+device: cuda
+overwrite: false
+
+# Keep Hydra from creating dated output directories; this project manages its own.
+hydra:
+  output_subdir: null
+  run:
+    dir: .
