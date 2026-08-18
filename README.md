@@ -183,3 +183,59 @@ leave the rest of the bird alone —
 This is the payoff of conditioning through cross-attention over the full 77-token
 CLIP sequence rather than a pooled vector.
 
+### SD 1.5 + LoRA
+
+| | |
+|---|---|
+| Trainable parameters | **3.19M of 862.7M (0.37%)** |
+| Training | 8,000 steps (~5.7 epochs), batch 8 @ 512px, ~1h50m |
+| VRAM | 4.7 GB |
+| Val loss | 0.1555 → **0.1500** |
+| Adapter size | **6.4 MB** |
+
+### Head to head
+
+Same prompts, same seed, same text encoder, same VAE, same sampler — only the
+denoiser differs. CLIP score is ViT-B/16 over 24 held-out validation captions.
+
+| Model | CLIP @ CFG 3.0 | CLIP @ CFG 7.5 | Attribute pairs correct |
+|---|---|---|---|
+| SD 1.5 (stock) | 0.3029 | 0.3053 | — |
+| **SD 1.5 + CUB LoRA** | 0.3015 | **0.3099** | ~2 / 4 |
+| Scratch DiT (55.6M) | 0.2871 | 0.2920 | **4 / 4** |
+
+**The honest summary: the LoRA wins on image quality, the from-scratch DiT wins
+on caption fidelity.**
+
+The LoRA produces sharp, photographic 512px birds and takes the best CLIP score
+— unsurprising for 860M pretrained parameters adapted with 3.19M more. But it
+inherits Stable Diffusion's strong prior, and that prior overrides fine caption
+detail: asked for "a small yellow bird with a **black** head" it renders a yellow
+bird with a yellow head.
+
+The DiT is blurrier and works at 256px, and its CLIP score is ~6% lower. But it
+has no prior to override — CUB is all it has ever seen — so it follows the
+caption literally, changing exactly the attribute the prompt changed in all four
+minimal pairs.
+
+**A caveat about the metric**, since it cuts against the images: CLIP score
+ranked *every* model higher at CFG 7.5 than at 3.0, including the DiT, even
+though 7.5 visibly posterises the DiT's output. CLIP score rewards prompt
+saturation more than human judgement does. It is a useful number, not a verdict
+— which is why the sample grids stay in this README next to it.
+
+## Dataset
+
+[CUB-200-2011](https://www.vision.caltech.edu/datasets/cub_200_2011/) (11,788
+images, 200 species) with the 10-captions-per-image annotations from Reed et al.
+(2016), *Learning Deep Representations of Fine-Grained Visual Descriptions*.
+Research and educational use only.
+
+## References
+
+- Peebles & Xie, [*Scalable Diffusion Models with Transformers*](https://arxiv.org/abs/2212.09748) (DiT)
+- Chen et al., [*PixArt-α*](https://arxiv.org/abs/2310.00426) — cross-attention conditioning, adaLN-single
+- Esser et al., [*Scaling Rectified Flow Transformers*](https://arxiv.org/abs/2403.03206) (SD3) — flow matching, logit-normal timesteps
+- Sehwag et al., [*Stretching Each Dollar*](https://arxiv.org/abs/2407.15811) — micro-budget diffusion training
+- Xie et al., [*SANA*](https://arxiv.org/abs/2410.10629) — efficient high-resolution synthesis
+- Hu et al., [*LoRA*](https://arxiv.org/abs/2106.09685)
