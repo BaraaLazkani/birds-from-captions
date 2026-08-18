@@ -1055,5 +1055,237 @@ denoiser alone.}
 \label{fig:app6}
 \end{figure}
 
+% =====================  STEP 15  =====================
+\step{Step 15: Engineering Faults Encountered}
+\label{sec:problems}
+
+Several faults in this project produced no error message and no obviously wrong
+output. We record them because diagnosing them was a substantial part of the
+work, and because each illustrates a failure mode that generalises beyond this
+project.
+
+\subsection{Silent configuration override}
+
+The configuration system composes a base file with per-task overrides. The
+merge order was specified incorrectly, so the dataset defaults were applied
+\emph{after} the task-specific values and silently overwrote them. Two training
+runs launched at a batch size of 64 regardless of what had been configured, and
+both exhausted memory identically.
+
+The symptom was misleading: the runs failed with out-of-memory errors, which
+suggested the batch size was too large, when in fact the configured batch size
+was never being applied at all. The diagnosis came from noticing that the
+reported number of batches per epoch implied a batch size nobody had requested.
+
+\begin{lesson}{Verify the effective configuration, not the intended one}
+After the fix, the resolved configuration was printed and asserted before any
+training was launched. A configuration system that silently discards your
+overrides is worse than one that errors.
+\end{lesson}
+
+\subsection{A dtype mismatch hidden by mixed precision}
+
+The timestep embedding computes its sinusoidal basis in 32-bit precision for
+accuracy, then passes it through a small network whose weights are 16-bit.
+During training this never failed, because automatic mixed precision inserts the
+cast implicitly. It failed the first time the model was sampled \emph{outside}
+an autocast context --- which is to say, the first time we tried to generate an
+image from the trained checkpoint.
+
+This is a general hazard: automatic mixed precision masks dtype errors during
+training and reveals them at inference, when the model is nominally finished.
+
+\subsection{Residual noise in every Stable Diffusion sample}
+
+Described in Section~\ref{sec:sampler}. The DDIM sampler's final step targeted
+$\bar\alpha_0 = 0.99915$ instead of $1.0$, leaving approximately $2.9\%$ of the
+original noise in every image. No exception, no visible artefact --- only a
+systematic error floor that the oracle test exposed immediately.
+
+\subsection{A checkpoint that was not the final model}
+
+The checkpoint callback was configured to retain the best models by validation
+loss and to maintain a ``last'' pointer. Because validation loss last improved at
+epoch 262, no checkpoint was written thereafter, and the ``last'' file
+correspondingly held epoch 262 rather than epoch 299. In this instance nothing
+of value was lost --- epoch 262 \emph{is} the best-validation model --- but the
+final 37 epochs of training are unrecoverable.
+
+\subsection{Per-epoch overhead dominating a small-dataset run}
+
+The ten-image correctness gate initially ran at 2.1 seconds per epoch while the
+GPU sat at $1\%$ utilisation. With only ten images, each epoch contained a single
+optimiser step, and the framework's per-epoch overhead --- dataloader restart,
+validation, callbacks --- accounted for essentially all of the wall-clock time.
+Repeating the dataset within each epoch raised utilisation to $93\%$ and cut the
+gate from 105 minutes to 20.
+
+\subsection{Library and tooling faults}
+
+Two further issues were external. A library upgrade changed CLIP's feature
+methods to return a structured output object rather than a tensor, breaking the
+evaluation code; a version-tolerant accessor was added. Separately, the model
+loader defaulted to downloading 32-bit weights (3.44\,GB) and casting them down,
+rather than fetching the 16-bit variant (1.72\,GB) directly --- a meaningful cost
+on a disk-constrained machine.
+
+% =====================  CONCLUSIONS  =====================
+\section{Conclusions}
+
+This project set out to build a text-conditional diffusion model from first
+principles and to measure it honestly against the pragmatic alternative of
+adapting a pretrained network. Both halves were completed on a single 8\,GB
+laptop GPU.
+
+The from-scratch diffusion transformer, at 55.6 million parameters and trained
+for 9 hours 21 minutes from random initialisation, produces recognisable,
+caption-appropriate bird images. Its progression from coloured noise at epoch 0
+to a sharp perched tanager at epoch 298 (Figure~\ref{fig:prog0}) is, we would
+argue, the most informative single result in this report, because it shows the
+model acquiring structure in a clear order: colour statistics, then figure-ground
+separation, then coarse shape, then fine detail.
+
+The LoRA fine-tune reached better photorealism and a better CLIP score
+($0.3099$ against $0.2920$) while training only $0.37\%$ of its parameters in
+under two hours. Measured purely as engineering, it is the more efficient route
+to a good-looking bird generator.
+
+Yet the from-scratch model followed captions more faithfully, succeeding in four
+of four controlled attribute tests against roughly two. We regard this as the
+most interesting finding of the project, and the explanation --- that a strong
+general prior competes with, rather than assists, fine-grained instruction
+following in a narrow domain --- is one that would not have been visible had we
+built only one of the two models.
+
+\subsection{Limitations}
+
+The from-scratch model operates at 256 pixels and is visibly softer than Stable
+Diffusion at 512. It fails outright on some captions
+(Figure~\ref{fig:heldout}). Its training loss was still falling when the run was
+stopped, so the comparison is between a converged pretrained model and an
+under-trained one. The evaluation uses 24 held-out captions, which is a small
+sample; a proper study would compute FID over the full validation split, which
+was not feasible in the available time. Finally, the attribute-control result is
+based on four caption pairs judged by eye --- indicative, not statistically
+robust.
+
+\subsection{Future work}
+
+The clearest next step is simply more training, since the model had not
+converged. Beyond that, the same code supports a 111-million parameter
+configuration at roughly twice the step time. Raising the from-scratch model to
+512 pixels would make the comparison against Stable Diffusion fairer, at four
+times the token count. A larger and more rigorous evaluation --- FID over the
+full validation set, and attribute tests over dozens of pairs with blind human
+scoring --- would turn the qualitative finding of Section~\ref{sec:eval} into a
+defensible quantitative claim.
+
+% =====================  APPENDIX  =====================
+\appendix
+\section{Reproduction}
+
+The full pipeline runs from four commands. All training is local; no data leaves
+the machine, and after the initial download no network access is required.
+
+\begin{lstlisting}[language=bash]
+# 1. Download CUB-200-2011 and build the shared latent caches
+python scripts/prepare_data.py
+
+# 2a. Correctness gate: memorise 10 images before committing GPU hours
+python scripts/train.py --config-name train_dit overfit=10 run_name=overfit_check
+
+# 2b. Train the from-scratch diffusion transformer (~9h)
+python scripts/train.py --config-name train_dit run_name=dit_small
+
+# 2c. Fine-tune Stable Diffusion 1.5 with LoRA (~2h)
+python scripts/train.py --config-name train_lora
+
+# 3. Evaluate
+python scripts/sample.py model_kind=dit checkpoint=checkpoints/dit_small/last.ckpt \
+       mode=sweep_guidance
+python scripts/compare_models.py --guidance 3.0 --score
+
+# 4. Launch the application
+python app.py
+\end{lstlisting}
+
+\section{Project Structure}
+
+\begin{lstlisting}
+configs/          Composable configuration: model, data, diffusion, logger
+ttimg/
+  data/           CUB download and index, bbox crop, latent precompute, dataset
+  models/         interface.py  -- the shared Denoiser seam
+                  dit.py        -- the from-scratch transformer
+                  sd15.py       -- Stable Diffusion UNet + LoRA
+                  encoders.py   -- shared frozen VAE and CLIP text encoder
+  diffusion/      flow.py       -- rectified flow objective
+                  sampler.py    -- Euler and DDIM integrators, guidance
+  training/       Lightning modules, EMA, sample-grid callback
+  eval/           CLIP score
+  pipeline.py     caption to image, model-agnostic
+scripts/          prepare_data, train, sample, compare_models, status, plot_curves
+tests/            oracle tests for both samplers
+app.py            Gradio interface: Generate and Compare tabs
+\end{lstlisting}
+
+\section{Summary of Measured Results}
+
+\begin{table}[H]
+\centering
+\caption{All measured quantities reported in this document.}
+\begin{tabularx}{\textwidth}{@{}Xr@{}}
+\toprule
+\textbf{Quantity} & \textbf{Value} \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Data pipeline}}\\
+Images / species / caption pairs & 11{,}788 / 200 / 117{,}880 \\
+Train / validation split & 11{,}199 / 589 \\
+Latent reconstruction PSNR (256\,px / 512\,px) & 27.15 / 30.77\,dB \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{From-scratch diffusion transformer}}\\
+Parameters & 55.6M \\
+Overfit gate loss (start $\rightarrow$ end) & $1.98 \rightarrow 0.0034$ \\
+Training loss (start $\rightarrow$ end) & $1.6006 \rightarrow 0.7188$ \\
+Validation loss (best) & $0.7296$ (epoch 262) \\
+Steps / epochs / wall-clock & 104{,}699 / 300 / 9\,h 21\,m \\
+Throughput & $\approx$122 img/s ($\approx$10.4 TFLOPS bf16) \\
+Optimal guidance scale & $3.0$ \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{LoRA fine-tune}}\\
+Trainable parameters & 3.19M / 862.7M (0.37\%) \\
+Validation loss (start $\rightarrow$ end) & $0.1555 \rightarrow 0.1500$ \\
+Steps / wall-clock / adapter size & 8{,}000 / $\approx$1\,h 50\,m / 6.4\,MB \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Evaluation}}\\
+CLIP score, SD 1.5 stock ($w{=}7.5$) & $0.3053$ \\
+CLIP score, SD 1.5 + LoRA ($w{=}7.5$) & $\mathbf{0.3099}$ \\
+CLIP score, scratch DiT ($w{=}7.5$) & $0.2920$ \\
+Attribute pairs correct (DiT / LoRA) & $\mathbf{4/4}$ / $2/4$ \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Sampler verification}}\\
+Rectified flow, 1 step & $4.1\times10^{-8}$ relative error \\
+DDIM, 10 steps & $2.4\times10^{-8}$ relative error \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{thebibliography}{9}
+\small
+\bibitem{dit} W.~Peebles and S.~Xie, ``Scalable Diffusion Models with Transformers,'' \emph{ICCV}, 2023. arXiv:2212.09748.
+\bibitem{pixart} J.~Chen et al., ``PixArt-$\alpha$: Fast Training of Diffusion Transformer for Photorealistic Text-to-Image Synthesis,'' \emph{ICLR}, 2024. arXiv:2310.00426.
+\bibitem{sd3} P.~Esser et al., ``Scaling Rectified Flow Transformers for High-Resolution Image Synthesis,'' \emph{ICML}, 2024. arXiv:2403.03206.
+\bibitem{ldm} R.~Rombach, A.~Blattmann, D.~Lorenz, P.~Esser and B.~Ommer, ``High-Resolution Image Synthesis with Latent Diffusion Models,'' \emph{CVPR}, 2022. arXiv:2112.10752.
+\bibitem{lora} E.~J.~Hu et al., ``LoRA: Low-Rank Adaptation of Large Language Models,'' \emph{ICLR}, 2022. arXiv:2106.09685.
+\bibitem{cfg} J.~Ho and T.~Salimans, ``Classifier-Free Diffusion Guidance,'' \emph{NeurIPS Workshop on Deep Generative Models}, 2021. arXiv:2207.12598.
+\bibitem{ddim} J.~Song, C.~Meng and S.~Ermon, ``Denoising Diffusion Implicit Models,'' \emph{ICLR}, 2021. arXiv:2010.02502.
+\bibitem{flow} Y.~Lipman, R.~T.~Q.~Chen, H.~Ben-Hamu, M.~Nickel and M.~Le, ``Flow Matching for Generative Modeling,'' \emph{ICLR}, 2023. arXiv:2210.02747.
+\bibitem{cub} C.~Wah, S.~Branson, P.~Welinder, P.~Perona and S.~Belongie, ``The Caltech-UCSD Birds-200-2011 Dataset,'' Technical Report CNS-TR-2011-001, California Institute of Technology, 2011.
+\bibitem{reed} S.~Reed, Z.~Akata, H.~Lee and B.~Schiele, ``Learning Deep Representations of Fine-Grained Visual Descriptions,'' \emph{CVPR}, 2016. arXiv:1605.05395.
+\bibitem{clip} A.~Radford et al., ``Learning Transferable Visual Models From Natural Language Supervision,'' \emph{ICML}, 2021. arXiv:2103.00020.
+\bibitem{sana} E.~Xie et al., ``SANA: Efficient High-Resolution Image Synthesis with Linear Diffusion Transformers,'' \emph{ICLR}, 2025. arXiv:2410.10629.
+\bibitem{micro} V.~Sehwag et al., ``Stretching Each Dollar: Diffusion Training from Scratch on a Micro-Budget,'' 2024. arXiv:2407.15811.
+\bibitem{stackgan} H.~Zhang et al., ``StackGAN: Text to Photo-realistic Image Synthesis with Stacked Generative Adversarial Networks,'' \emph{ICCV}, 2017. arXiv:1612.03242.
+\end{thebibliography}
 
 \end{document}
