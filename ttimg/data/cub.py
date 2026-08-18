@@ -151,7 +151,51 @@ def build_index(root: Path, require_captions: bool = True) -> list[CubRecord]:
     return records
 
 
-def split_records(def crop_box(
+def split_records(
+    records: list[CubRecord],
+    mode: str = "by_image",
+    val_fraction: float = 0.05,
+    n_val_classes: int = 50,
+    seed: int = 42,
+) -> tuple[list[CubRecord], list[CubRecord]]:
+    """Partition records into train/val.
+
+    Two modes, because they answer different questions:
+
+    ``by_image`` (default)
+        Hold out a small random slice of images across all 200 species.  At
+        ~12k images every sample counts, and for a generative model the
+        validation loss is a weak signal anyway -- the real read is the sample
+        grid.  So we keep training data maximal.
+
+    ``by_class``
+        Hold out whole species, the stricter Reed/StackGAN-style protocol.  Use
+        this to ask "does it compose captions for birds it has never seen?"  It
+        costs ~25% of the training data, so it is opt-in.
+    """
+    import random
+
+    rng = random.Random(seed)
+
+    if mode == "by_class":
+        class_ids = sorted({r.class_id for r in records})
+        rng.shuffle(class_ids)
+        val_classes = set(class_ids[:n_val_classes])
+        train = [r for r in records if r.class_id not in val_classes]
+        val = [r for r in records if r.class_id in val_classes]
+    elif mode == "by_image":
+        shuffled = list(records)
+        rng.shuffle(shuffled)
+        n_val = max(1, int(len(shuffled) * val_fraction))
+        val, train = shuffled[:n_val], shuffled[n_val:]
+    else:
+        raise ValueError(f"unknown split mode {mode!r}; expected 'by_image' or 'by_class'")
+
+    print(f"[cub] split={mode}: {len(train)} train / {len(val)} val")
+    return train, val
+
+
+def crop_box(
     bbox: tuple[float, float, float, float] | None,
     width: int,
     height: int,
