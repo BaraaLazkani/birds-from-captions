@@ -114,3 +114,22 @@ tests/            oracle tests for the samplers
 app.py            Gradio: generate + side-by-side compare
 ```
 
+## Verification
+
+The project is built around gates that fail loudly and early:
+
+| Gate | Check | Status |
+|---|---|---|
+| Environment | Blackwell `sm_120` survives the installs | ✅ |
+| Latent cache | Decoded latents match originals | ✅ **27.15 dB** |
+| Flip bookkeeping | Cache index 1 is the mirror of index 0 | ✅ **27.13 dB** |
+| Flow sampler | Oracle denoiser recovers data exactly | ✅ **4e-8, at 1 step** |
+| DDIM sampler | Oracle denoiser recovers data exactly | ✅ **2.4e-8** |
+| CFG | Scale 1.0 is bit-identical to unguided | ✅ |
+| DiT correctness | Memorises 10 images (10 distinct species) | ✅ **loss 1.98 → 0.0034** |
+| DiT full run | 300 epochs to completion | ✅ **val 1.505 → 0.730** |
+
+The sharpest end-to-end test is the **attribute sweep**: two captions differing
+in exactly one word, rendered from the same seed. A model with working
+cross-attention changes that attribute and leaves the rest of the bird alone.
+
