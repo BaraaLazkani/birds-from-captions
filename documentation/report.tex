@@ -555,5 +555,194 @@ where $w$ is the guidance scale. Section~\ref{sec:cfg} shows that the correct
 value of $w$ is not a constant --- it changes as the model trains, a finding
 that initially looked like a training failure.
 
+% =====================  STEP 8  =====================
+\step{Step 8: The Sampler, and Proving It Correct}
+\label{sec:sampler}
+
+Both denoisers are driven by one sampling entry point, which dispatches on the
+quantity each model predicts. The from-scratch model predicts a velocity and is
+integrated with an Euler step; Stable Diffusion predicts noise and is integrated
+with DDIM. Both were implemented by hand rather than delegated to a library, so
+that the two objectives could be compared directly rather than hidden behind an
+abstraction.
+
+A hand-written sampler is precisely the kind of component that fails silently: a
+sign error or a misplaced square root still produces plausible-looking noise, and
+no exception is raised. We therefore tested both samplers against \textbf{oracle
+denoisers} --- analytically perfect models that return the exact target by
+construction. If the sampler is correct, integration must recover the original
+data.
+
+\begin{table}[htbp]
+\centering
+\caption{Sampler verification against oracle denoisers. Relative reconstruction
+error; anything above $10^{-5}$ would indicate a defect.}
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Test} & \textbf{Condition} & \textbf{Relative error} \\
+\midrule
+Rectified flow (Euler) & 1 step & $4.1\times10^{-8}$ \\
+Rectified flow (Euler) & 50 steps & $4.3\times10^{-8}$ \\
+DDIM & 10 steps & $2.4\times10^{-8}$ \\
+DDIM & 200 steps & $5.5\times10^{-9}$ \\
+Guidance scale $w=1$ & vs.\ unguided & $0$ (bit-identical) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The flow result deserves emphasis. The sampler recovers the data \emph{exactly
+in a single step}, which is not a coincidence but the defining property of
+rectified flow: straight paths make Euler integration exact. Observing that
+numerically confirms both the sampler and the objective simultaneously.
+
+\begin{lesson}{A bug this test caught}
+On first run, DDIM's error was stuck at $2.7\times10^{-2}$ regardless of step
+count. That it did not improve with more steps was the diagnostic clue: a
+convergence problem shrinks with more steps, a systematic one does not. The
+cause was that the final step targeted $\bar\alpha_0 = 0.99915$ rather than
+$1.0$, leaving roughly $2.9\%$ of the original noise in \emph{every} sample
+Stable Diffusion produced. After correcting the terminal value the error fell to
+$2.4\times10^{-8}$.
+\end{lesson}
+
+% =====================  STEP 9  =====================
+\step{Step 9: The Correctness Gate --- Memorising Ten Images}
+
+Before committing hours of GPU time to a full training run, the from-scratch
+model was required to pass a diagnostic: \textbf{memorise ten images}. A
+diffusion model that cannot overfit ten examples has a bug, and finding it at
+this stage costs minutes rather than a wasted overnight run.
+
+The test was strengthened after an initial oversight. Because the CUB index is
+ordered by species, taking the first ten records yielded ten photographs of the
+\emph{same} bird with near-identical captions --- a model could have passed by
+emitting one average albatross while its cross-attention was entirely broken.
+The subset was changed to stride across the dataset, giving ten visually
+distinct species and making caption-reading a requirement for success.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/overfit_gate.jpg}
+\caption{The correctness gate. Top: the ten target images, decoded through the
+autoencoder. Middle: model output after 100 steps --- pure texture. Bottom:
+after 3{,}600 steps, near-perfect species-correct reconstructions generated from
+the captions alone. Training loss fell from $1.98$ to $\mathbf{0.0034}$.}
+\label{fig:gate}
+\end{figure}
+
+The starting loss of approximately $1.98$ is itself a check on the
+implementation. For unit-variance latents, the flow target $\varepsilon - x_0$
+has variance $2$, so an untrained model scores exactly $2.0$ by construction.
+Beginning at that value confirms the objective is implemented as derived.
+
+% =====================  STEP 10  =====================
+\step{Step 10: Training the From-Scratch Model}
+\label{sec:train}
+
+With the gate passed, the full run was launched.
+
+\begin{table}[htbp]
+\centering
+\caption{From-scratch training run summary.}
+\begin{tabularx}{0.92\textwidth}{@{}lX@{}}
+\toprule
+Batch size & 32 (the measured ceiling; 48 exhausts memory) \\
+Steps & 104{,}699 across 300 epochs \\
+Wall-clock time & \textbf{9 hours 21 minutes} \\
+Throughput & $\approx 122$ images/second, or about $10.4$ TFLOPS in \texttt{bfloat16} \\
+Optimiser & AdamW, $\beta = (0.9, 0.95)$, learning rate $10^{-4}$ \\
+Schedule & 1{,}000-step linear warmup, then cosine decay \\
+Weight averaging & EMA, decay $0.9999$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The measured throughput is worth interpreting. At roughly $10.4$ TFLOPS the run
+is close to the theoretical peak of this GPU in \texttt{bfloat16}, which means
+training was \emph{compute-bound} rather than limited by data loading or memory
+bandwidth. The precomputed latent cache is what made that possible.
+
+\subsection{Loss curves}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.86\textwidth, height=6.4cm,
+  xlabel={epoch}, ylabel={flow-matching loss},
+  grid=both, grid style={line width=0.2pt, draw=line},
+  legend pos=north east, legend cell align=left,
+  tick label style={font=\scriptsize}, label style={font=\small},
+  ymin=0.68, ymax=1.65, xmin=0, xmax=300,
+]
+\addplot[thick, accent] table[x=epoch, y=train] {figures/dit_loss.dat};
+\addlegendentry{training}
+\addplot[thick, blue!65, dashed] table[x=epoch, y=val] {figures/dit_loss.dat};
+\addlegendentry{validation}
+\end{axis}
+\end{tikzpicture}
+\caption{From-scratch training. Loss falls steeply for the first 20 epochs, then
+improves slowly for the remaining 280. Validation tracks training closely
+throughout, indicating the model is learning the distribution rather than
+memorising it --- unsurprising given 117{,}880 caption pairs.}
+\label{fig:ditcurve}
+\end{figure}
+
+Training loss fell from $1.6006$ to $\mathbf{0.7188}$ and validation from
+$1.5047$ to $0.7452$, with the best validation value of $\mathbf{0.7296}$ at
+epoch 262. Critically, \textbf{training loss was still decreasing when the run
+ended}: the model had not converged, and more compute would still buy quality.
+
+\subsection{How the model improved --- visual progression}
+
+The loss curve above is honest but uninformative. Between epoch 100 and epoch
+300 it moves by less than $0.03$, which tells the reader almost nothing about
+what changed. For a generative model the meaningful record is a fixed prompt
+rendered at a fixed seed at intervals through training, so that the only
+variable is the model itself.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/progression_p0.jpg}
+\vspace{2pt}
+\caption{\textit{``this bird has a bright red belly with black wings and a short
+pointed beak.''} Reading left to right, top row then bottom: epochs 0, 4, 10, 20, 40, then 70, 110, 160, 220, 298.
+At epoch 0 the output is coloured noise. By epoch 4 a vague figure-ground
+separation appears. By epoch 10 the caption's red is present but unstructured.
+Around epoch 40--70 a bird silhouette resolves. From epoch 110 onward the black
+wing marking, the perch and the depth-of-field background all sharpen.}
+\label{fig:prog0}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/progression_p7.jpg}
+\vspace{2pt}
+\caption{\textit{``this small bird has an iridescent green throat and a very long
+thin bill.''} The same epochs. Note that the model learns not only the bird but
+its \emph{context}: nothing in the caption mentions a flower, yet a red bloom
+appears alongside the hummingbird because the training distribution associates
+the two.}
+\label{fig:prog7}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/progression_p4.jpg}
+\vspace{2pt}
+\caption{\textit{``a large white seabird with long narrow wings and a hooked
+orange beak.''} Wing structure and the pose of a bird in flight take
+substantially longer to resolve than flat colour regions do --- compare the
+sharpness at epoch 40 here against Figure~\ref{fig:prog0}.}
+\label{fig:prog4}
+\end{figure}
+
+Read together, these three sequences show a consistent ordering in what the
+model acquires. Global colour statistics come first, within a handful of epochs.
+Figure-ground separation follows. Coarse object shape appears around epochs
+40--70. Fine structure --- wing markings, bill geometry, feet gripping a branch
+--- continues improving until the end of the run, and had not stopped improving
+when the run was terminated.
+
 
 \end{document}
