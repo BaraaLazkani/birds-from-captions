@@ -59,8 +59,15 @@ class LatentCaptionDataset(Dataset):
         if split != "all":
             records = [r for r in records if r["split"] == split]
 
-        if max_records is not None:
-            records = records[:max_records]
+        if max_records is not None and max_records < len(records):
+            # Stride rather than take the first N. CUB's index is ordered by
+            # species, so a head slice would be ten photos of one bird with ten
+            # near-identical captions -- and a model could "pass" the overfit
+            # gate by emitting a single average bird while its cross-attention
+            # was entirely broken. Spreading the subset across species means
+            # passing requires actually reading the caption.
+            stride = len(records) // max_records
+            records = records[::stride][:max_records]
 
         self.records = records
         self.latent_path = latent_path
