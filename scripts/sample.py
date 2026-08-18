@@ -36,7 +36,7 @@ def run_single(pipeline, cfg: DictConfig, out_dir: Path) -> Path:
     images = pipeline.generate(
         prompts, steps=cfg.steps, guidance_scale=cfg.guidance_scale, seed=cfg.seed
     )
-    path = _stamped(out_dir, f"{cfg.model}_single")
+    path = _stamped(out_dir, f"{cfg.model_kind}_single")
     save_grid(images, path, columns=min(4, len(images)))
     print(f"\n  prompt: {cfg.prompt}\n  -> {path}")
     return path
