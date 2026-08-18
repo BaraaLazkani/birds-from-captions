@@ -19,6 +19,22 @@ from PIL import Image
 CLIP_SCORE_REPO = "openai/clip-vit-base-patch16"
 
 
+def _as_tensor(output) -> torch.Tensor:
+    """Return the embedding tensor from a CLIP feature call.
+
+    transformers v5 wraps ``get_image_features`` / ``get_text_features`` results
+    in an output object, where v4 returned a bare tensor. Handle both so this
+    does not break on a library bump.
+    """
+    if torch.is_tensor(output):
+        return output
+    for attribute in ("image_embeds", "text_embeds", "pooler_output", "last_hidden_state"):
+        value = getattr(output, attribute, None)
+        if torch.is_tensor(value):
+            return value
+    raise TypeError(f"cannot extract embeddings from {type(output).__name__}")
+
+
 class CLIPScorer:
     """Cosine similarity between CLIP image and text embeddings."""
 
@@ -45,9 +61,13 @@ class CLIPScorer:
             text=prompts, images=images, return_tensors="pt", padding=True, truncation=True
         ).to(self.device)
 
-        image_features = self.model.get_image_features(pixel_values=inputs["pixel_values"])
-        text_features = self.model.get_text_features(
-            input_ids=inputs["input_ids"], attention_mask=inputs.get("attention_mask")
+        image_features = _as_tensor(
+            self.model.get_image_features(pixel_values=inputs["pixel_values"])
+        )
+        text_features = _as_tensor(
+            self.model.get_text_features(
+                input_ids=inputs["input_ids"], attention_mask=inputs.get("attention_mask")
+            )
         )
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
