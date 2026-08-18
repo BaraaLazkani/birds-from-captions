@@ -744,5 +744,87 @@ Figure-ground separation follows. Coarse object shape appears around epochs
 --- continues improving until the end of the run, and had not stopped improving
 when the run was terminated.
 
+% =====================  STEP 11  =====================
+\step{Step 11: Fine-Tuning Stable Diffusion 1.5 with LoRA}
+
+The second model adapts a pretrained network instead of building one. Low-Rank
+Adaptation freezes the original weights and injects trainable low-rank matrices
+into the attention projections. For a weight matrix $W_0 \in \mathbb{R}^{d\times
+k}$, the update is constrained to
+\begin{equation}
+W = W_0 + \Delta W = W_0 + BA, \qquad B \in \mathbb{R}^{d\times r},\ A \in \mathbb{R}^{r\times k},\ r \ll \min(d,k).
+\end{equation}
+With rank $r=16$ applied to the query, key, value and output projections of
+every attention block, this trains \textbf{3.19 million of 862.7 million
+parameters --- $0.37\%$ of the network} --- and produces an adapter file of only
+6.4\,MB.
+
+Adapting both self-attention and cross-attention is deliberate:
+cross-attention carries the caption-to-image association, while self-attention
+carries spatial and stylistic structure. Updating both allows the adapter to
+learn CUB's subject matter and its photographic character together.
+
+\begin{table}[htbp]
+\centering
+\caption{LoRA fine-tuning run summary.}
+\begin{tabularx}{0.92\textwidth}{@{}lX@{}}
+\toprule
+Trainable parameters & $3.19$M of $862.7$M ($0.37\%$) \\
+Rank / alpha & 16 / 16 \\
+Resolution & 512 pixels (Stable Diffusion's native resolution) \\
+Batch size & 8, with gradient checkpointing \\
+Steps & 8{,}000 ($\approx 5.7$ epochs) \\
+Peak VRAM & 4.7\,GB \\
+Wall-clock time & $\approx 1$ hour 50 minutes \\
+Validation loss & $0.1555 \rightarrow \mathbf{0.1500}$ \\
+Adapter size & \textbf{6.4\,MB} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Note that the two models' losses are \emph{not} comparable: they optimise
+different objectives against different targets (velocity versus noise) on
+different resolutions. Only the sample-based evaluation in
+Section~\ref{sec:eval} compares them meaningfully.
+
+% =====================  STEP 12  =====================
+\step{Step 12: Guidance Calibration --- A Finding That Looked Like a Failure}
+\label{sec:cfg}
+
+Throughout training, progress grids were rendered at a fixed guidance scale of
+$w=4.0$. Late in the run those grids appeared to \emph{deteriorate}: colours
+became harsher and feather texture broke into a fragmented, mosaic-like pattern.
+The loss curves showed no corresponding degradation, which made the observation
+puzzling.
+
+A guidance sweep on the final checkpoint resolved it.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/dit_guidance_sweep_tanager.jpg}
+\vspace{3pt}
+\includegraphics[width=\textwidth]{figures/dit_guidance_sweep_hummingbird.jpg}
+\caption{Guidance sweeps at $w = 1, 2, 3, 4, 6, 8$ (left to right), fixed seed
+and prompt. At $w=1$ output is muted and structurally vague. At $w=3$ it is
+crisp, with genuine feather detail. By $w=6$--$8$ the reds posterise into flat
+saturated masses and fine detail dissolves. The hummingbird's red flower (lower
+strip) degrades first, being the most saturated element in the prompt set.}
+\label{fig:cfg}
+\end{figure}
+
+\begin{finding}{The guidance a model wants falls as it trains}
+An under-trained model needs strong guidance to produce anything coherent,
+because its conditional and unconditional predictions are close together and
+must be extrapolated aggressively. A well-trained model separates them properly,
+and the same extrapolation now over-shoots into saturation. The apparent
+regression was therefore \emph{a stale sampling setting, not a worse model}. The
+correct operating point for the final checkpoint is $w = 3.0$; the grids had been
+drawn at $4.0$ throughout.
+\end{finding}
+
+The general lesson is that any fixed preview setting will eventually mislead you
+about a generative training run, because the model's optimal inference
+configuration is itself a moving target.
+
 
 \end{document}
