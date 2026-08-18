@@ -1,0 +1,14 @@
+# ~56M-parameter DiT. Fits an 8GB card at batch 128+ and reaches recognisable
+# birds in a few hours -- the default for this project.
+name: dit_small
+_target_: ttimg.models.dit.ScratchDiT
+
+latent_size: 32        # 256px images through SD's 8x VAE
+latent_channels: 4
+patch_size: 2          # -> 16x16 = 256 tokens
+dim: 512
+depth: 12
+num_heads: 8
+context_dim: 768       # CLIP ViT-L/14 hidden size
+mlp_ratio: 4.0
+qk_norm: true          # RMSNorm on Q/K; keeps bf16 attention logits bounded
