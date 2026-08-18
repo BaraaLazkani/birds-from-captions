@@ -82,9 +82,9 @@ checkpoint:
 
 data:
   resolution: 256
-  # ~153 MB/sample of retained adaLN-modulation intermediates under autocast is
-  # what sets this. 32 OOMs once EMA + text encoder are resident; 16 is safe.
-  batch_size: 16
+  # ~153 MB/sample of retained adaLN-modulation intermediates under autocast
+  # sets this. Measured: 32 fits at 6.8 GB and ran the full 300 epochs; 48 OOMs.
+  batch_size: 32
   num_workers: 6
 
 hydra:
