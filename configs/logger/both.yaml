@@ -1,0 +1,6 @@
+# TensorBoard for curves *and* sample-grid images, CSV as the durable plain-text
+# record. Everything local -- no wandb, nothing leaves the machine.
+#   tensorboard --logdir logs/
+tensorboard: true
+csv: true
+save_dir: ./logs
