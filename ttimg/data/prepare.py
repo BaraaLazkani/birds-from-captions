@@ -35,7 +35,28 @@ from ..models.encoders import LATENT_CHANNELS, VAE_DOWNSCALE, encode_images, loa
 from .cub import CubRecord, build_index, crop_box, split_records
 
 
-class _UnusedCropDatasetdef _encode_pair(vae, batch: torch.Tensor) -> torch.Tensor:
+class _CropDataset(torch.utils.data.Dataset):
+    """Loads and crops images in DataLoader workers.
+
+    Decoding a JPEG and bicubic-resizing it costs about as much as the VAE
+    forward pass itself, and it is pure single-threaded CPU work.  Pushing it
+    into worker processes overlaps it with GPU time and roughly halves wall
+    clock for the whole precompute.
+    """
+
+    def __init__(self, records: list[CubRecord], resolution: int, object_ratio: float) -> None:
+        self.records = records
+        self.resolution = resolution
+        self.object_ratio = object_ratio
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        return torch.from_numpy(_load_and_crop(self.records[idx], self.resolution, self.object_ratio))
+
+
+def _encode_pair(vae, batch: torch.Tensor) -> torch.Tensor:
     """Encode a pixel batch and its mirror -> [B, 2, C, h, w] fp16 on CPU."""
     original = encode_images(vae, batch)
     flipped = encode_images(vae, torch.flip(batch, dims=[3]))
