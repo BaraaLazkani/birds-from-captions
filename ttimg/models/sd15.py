@@ -44,7 +44,17 @@ class SD15UNet(Denoiser):
         super().__init__()
         from diffusers import UNet2DConditionModel
 
-        self.unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet", torch_dtype=dtype)
+        # Prefer the fp16 variant: 1.72 GB on disk instead of 3.44 GB for the
+        # fp32 weights, which would only be cast down on load anyway. Matters
+        # here because the machine is disk-constrained. Fall back if a mirror
+        # does not publish the variant.
+        try:
+            self.unet = UNet2DConditionModel.from_pretrained(
+                repo, subfolder="unet", torch_dtype=dtype, variant="fp16"
+            )
+        except Exception:
+            print("[sd15] fp16 variant unavailable; falling back to full-precision weights")
+            self.unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet", torch_dtype=dtype)
         self.latent_size = latent_size
         self.latent_channels = self.unet.config.in_channels
         self.has_lora = False
