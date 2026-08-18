@@ -1,0 +1,17 @@
+# Data, caches and archives
+datasets/
+*.tgz
+*.zip
+*.npy
+
+# Training artefacts
+logs/
+checkpoints/
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
