@@ -88,12 +88,28 @@ class SampleGridCallback(Callback):
         if trainer.sanity_checking or (trainer.current_epoch % self.every_n_epochs):
             return
 
-        ema = getattr(module, "ema", None)
-        if self.use_ema and ema is not None:
-            with ema.averaged(module.denoiser):
+        # Sampling runs the denoiser at double batch (classifier-free guidance)
+        # and loads the VAE, on top of memory the training loop has already
+        # reserved. On an 8 GB card that can tip over -- and losing an
+        # overnight run because a *preview* failed would be absurd. Release the
+        # cache first, and treat any failure here as non-fatal.
+        torch.cuda.empty_cache()
+        try:
+            ema = getattr(module, "ema", None)
+            if self.use_ema and ema is not None:
+                with ema.averaged(module.denoiser):
+                    grid = self._render(module)
+            else:
                 grid = self._render(module)
-        else:
-            grid = self._render(module)
+        except torch.OutOfMemoryError:
+            print("\n[samples] skipped this epoch: out of memory during sampling (training continues)")
+            torch.cuda.empty_cache()
+            return
+        except Exception as exc:  # noqa: BLE001 - previews must never kill a run
+            print(f"\n[samples] skipped this epoch: {type(exc).__name__}: {exc} (training continues)")
+            return
+        finally:
+            torch.cuda.empty_cache()
 
         path = self.out_dir / f"epoch_{trainer.current_epoch:04d}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
