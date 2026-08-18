@@ -1,0 +1,75 @@
+# Fine-tune Stable Diffusion 1.5 on CUB with LoRA adapters.
+#
+#   python scripts/train.py --config-name train_lora
+#
+# NOTE: _self_ comes LAST so values written in *this* file override the config
+# groups above. With _self_ first, Hydra merges this file and then lets the
+# groups overwrite it -- which silently discarded every data.* override here.
+defaults:
+  - model: sd15_lora
+  - data: cub
+  - logger: both
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+task: lora
+run_name: sd15_lora_cub
+seed: 42
+
+# bf16 throughout, matching the latent cache and the DiT run. Chosen over fp16
+# for two reasons: its fp32-range exponent removes the loss-scaling/overflow
+# failure mode entirely (no GradScaler), and keeping one precision regime across
+# the project avoids the dtype mismatches that arise when a frozen fp16 base
+# meets fp32 adapters under fp16 autocast. The adapters are still promoted to
+# fp32 in add_lora, since their gradients are small enough to underflow in 16-bit.
+precision: bf16-mixed
+accelerator: gpu
+devices: 1
+
+max_epochs: 8
+max_steps: 8000            # ~5.7 epochs over 11k images at batch 8; LoRA domain
+                          # adaptation converges well before 20k, and this leaves
+                          # time for evaluation. ~1.24 steps/s measured.
+gradient_clip_val: 1.0
+accumulate_grad_batches: 1
+val_check_interval: 1.0
+
+optim:
+  learning_rate: 1.0e-4   # high, but LoRA adapters start at zero
+  weight_decay: 0.01
+  warmup_steps: 200
+  caption_dropout: 0.1
+
+overfit: null
+
+sampling:
+  every_n_epochs: 2
+  steps: 30
+  guidance_scale: 7.5     # SD's usual operating point
+  seed: 1234
+  columns: 4
+  prompts:
+    - "this bird has a bright red belly with black wings and a short pointed beak"
+    - "this bird has a bright blue belly with black wings and a short pointed beak"
+    - "a small yellow bird with a grey head and a thin sharp bill"
+    - "a small yellow bird with a black head and a thin sharp bill"
+    - "a large white seabird with long narrow wings and a hooked orange beak"
+    - "this bird is completely black with a long tail and a stout bill"
+    - "a brown speckled bird with a white throat and striped wingbars"
+    - "this small bird has an iridescent green throat and a very long thin bill"
+
+checkpoint:
+  dir: ./checkpoints
+  save_top_k: 3
+  every_n_epochs: 5
+
+data:
+  resolution: 512         # SD 1.5's native resolution
+  batch_size: 8           # 860M UNet + gradient checkpointing on 8GB
+  num_workers: 6
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
