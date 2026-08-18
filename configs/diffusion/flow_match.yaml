@@ -1,0 +1,9 @@
+# Rectified flow: x_t = (1-t) x_0 + t eps, target velocity = eps - x_0.
+name: flow_match
+
+# Logit-normal concentrates sampled timesteps in the middle of the trajectory,
+# where the denoising task is hard and sample quality is decided. Uniform wastes
+# capacity on the near-clean and near-pure-noise ends. (SD3, sec. 3.1)
+timestep_sampling: logit_normal
+logit_mean: 0.0
+logit_std: 1.0
