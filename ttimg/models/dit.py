@@ -88,7 +88,10 @@ class TimestepEmbedder(nn.Module):
         )
         args = t[:, None] * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        return self.mlp(embedding)
+        # The sinusoid is built in fp32 for precision, but the MLP weights may be
+        # bf16 at inference. Under autocast this cast happens implicitly, so the
+        # mismatch only surfaces when sampling outside an autocast context.
+        return self.mlp(embedding.to(self.mlp[0].weight.dtype))
 
 
 class Attention(nn.Module):
@@ -278,6 +281,14 @@ class ScratchDiT(Denoiser):
         return x.reshape(batch, c, g * p, g * p)
 
     def forward(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        # Sampling may run in a different precision than the weights are held in
+        # (bf16 inference over an fp32 checkpoint, say). Adopt the weights' dtype
+        # rather than requiring callers to know it -- the SD adapter does the same,
+        # so the sampler can stay precision-agnostic across both models.
+        weight_dtype = self.patch_embed.weight.dtype
+        x_t = x_t.to(weight_dtype)
+        cond = cond.to(weight_dtype)
+
         x = self.patch_embed(x_t).flatten(2).transpose(1, 2)  # [B, T, D]
         x = x + self.pos_embed.to(x.dtype)
 
