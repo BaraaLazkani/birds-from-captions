@@ -133,3 +133,53 @@ The sharpest end-to-end test is the **attribute sweep**: two captions differing
 in exactly one word, rendered from the same seed. A model with working
 cross-attention changes that attribute and leaves the rest of the bird alone.
 
+## Results
+
+### From-scratch DiT
+
+Trained from random initialisation on one 8 GB laptop GPU.
+
+| | |
+|---|---|
+| Parameters | 55.6M |
+| Training | 300 epochs, 104,699 steps, **9h21m** |
+| Throughput | batch 32, ~122 img/s (~10.4 TFLOPS bf16 — near this card's peak) |
+| Train loss | 1.6006 → **0.7188** |
+| Val loss | 1.5047 → 0.7452 (best **0.7296** @ epoch 262) |
+
+Starting loss of ~1.98 is not arbitrary: for unit-variance latents the flow
+target `eps - x_0` has variance 2, so an untrained model scores 2.0 by
+definition. That the run begins there is a check on the objective itself.
+
+### Guidance is a moving target
+
+Every progress grid during training was drawn at a fixed CFG of 4.0, and the
+late-training grids looked *worse* than the mid-training ones — harsher colour,
+fragmented feather texture. The loss curves showed no such degradation.
+
+The sweep explains it. **The guidance a model wants falls as it trains.** An
+under-trained model needs strong guidance to produce anything coherent; a
+well-trained one over-saturates at the same scale. At CFG 1 output is muted and
+vague, CFG 3 is crisp with real feather detail, and by CFG 6–8 reds posterise
+into flat masses and detail dissolves.
+
+**CFG 3.0 is the operating point.** The apparent regression was a stale sampling
+setting, not a worse model — worth remembering, because a fixed preview setting
+will eventually mislead you about any generative run.
+
+### Text conditioning works
+
+The sharpest test CUB affords: caption pairs differing in exactly one word,
+rendered from identical noise. All four pairs change the intended attribute and
+leave the rest of the bird alone —
+
+| prompt A | prompt B | result |
+|---|---|---|
+| bright **red** belly, black wings | bright **blue** belly, black wings | ✅ |
+| yellow bird, **grey** head | yellow bird, **black** head | ✅ |
+| very **long thin** bill | very **short thick** bill | ✅ |
+| completely **white** bird on water | completely **black** bird on water | ✅ |
+
+This is the payoff of conditioning through cross-attention over the full 77-token
+CLIP sequence rather than a pooled vector.
+
