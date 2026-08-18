@@ -1,0 +1,93 @@
+# Train the from-scratch diffusion transformer.
+#
+#   python scripts/train.py --config-name train_dit
+#   python scripts/train.py --config-name train_dit model=dit_base
+#   python scripts/train.py --config-name train_dit overfit=10   # correctness gate
+#
+# NOTE: _self_ comes LAST so values written in *this* file override the config
+# groups above. With _self_ first, Hydra merges this file and then lets the
+# groups overwrite it -- which silently discarded every data.* override here.
+defaults:
+  - model: dit_small
+  - data: cub
+  - diffusion: flow_match
+  - logger: both
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+task: dit
+run_name: dit_small
+seed: 42
+
+# bf16 rather than fp16: Blackwell runs it at full speed, and its fp32-range
+# exponent removes the loss-scaling failure mode entirely.
+precision: bf16-mixed
+accelerator: gpu
+devices: 1
+
+# Budget set from measurement, not guesswork. A bare training step at batch 32
+# peaks at 5.69 GB, but the real run also holds the EMA shadow (~220 MB), the
+# CLIP text encoder (~250 MB) and Lightning's own overhead -- which together
+# pushed it to 7.07 GB and OOM'd on a 7.52 GB card. Batch 16 leaves real margin,
+# which matters more than peak throughput for an unattended overnight run.
+max_epochs: 300
+max_steps: 200000         # also sets the cosine decay horizon
+gradient_clip_val: 1.0
+accumulate_grad_batches: 1
+val_check_interval: 1.0
+
+optim:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 1000      # transformers diverge without it
+  caption_dropout: 0.1    # the null-embedding rate that enables CFG
+  ema_decay: 0.9999
+  ema_warmup: 1000
+
+# Diagnostic mode: memorise N images. If this does not converge to near-perfect
+# reconstructions within a few thousand steps, there is a bug -- fix it before
+# spending hours on the full run. The subset is strided across species, so
+# passing requires reading the caption rather than emitting one average bird.
+overfit: null
+# Records are repeated this many times per epoch. Without it a 10-image epoch is
+# one optimiser step, and Lightning's per-epoch overhead dominates completely
+# (measured: 2.1 s/epoch to wrap ~20 ms of compute).
+overfit_repeat: 100
+
+sampling:
+  every_n_epochs: 10
+  steps: 30
+  guidance_scale: 4.0
+  seed: 1234
+  columns: 4
+  # Fixed prompts, chosen to make text conditioning visible: the first pairs
+  # differ only in a colour word, so a working model must change that colour
+  # and nothing else.
+  prompts:
+    - "this bird has a bright red belly with black wings and a short pointed beak"
+    - "this bird has a bright blue belly with black wings and a short pointed beak"
+    - "a small yellow bird with a grey head and a thin sharp bill"
+    - "a small yellow bird with a black head and a thin sharp bill"
+    - "a large white seabird with long narrow wings and a hooked orange beak"
+    - "this bird is completely black with a long tail and a stout bill"
+    - "a brown speckled bird with a white throat and striped wingbars"
+    - "this small bird has an iridescent green throat and a very long thin bill"
+
+checkpoint:
+  dir: ./checkpoints
+  # Each checkpoint is ~900 MB (weights + EMA + optimiser state), so keep few.
+  save_top_k: 2
+  every_n_epochs: 10
+
+data:
+  resolution: 256
+  # ~153 MB/sample of retained adaLN-modulation intermediates under autocast is
+  # what sets this. 32 OOMs once EMA + text encoder are resident; 16 is safe.
+  batch_size: 16
+  num_workers: 6
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
