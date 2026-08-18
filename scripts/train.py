@@ -119,7 +119,10 @@ def main(cfg: DictConfig) -> None:
         # Explicit device: the module has not been moved to the accelerator yet.
         device = "cuda" if cfg.accelerator == "gpu" else "cpu"
         reference_grid(
-            datamodule.train_set,
+            # val_set, not train_set: the training copy repeats each record to
+            # pack epochs, and iterating it would render the same 10 birds 100
+            # times over.
+            datamodule.val_set,
             get_shared_vae(dtype=torch.bfloat16, device=device),
             Path("outputs/samples") / cfg.run_name / "reference.png",
             columns=cfg.sampling.columns,
