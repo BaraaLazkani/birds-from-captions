@@ -97,3 +97,20 @@ Everything is Hydra-configured; any value can be overridden on the command line:
 python scripts/train.py --config-name train_dit model=dit_base data.batch_size=16
 ```
 
+## Layout
+
+```
+configs/          Hydra configs — model, data, diffusion, logger, per-task
+ttimg/
+  data/           CUB download & index, bbox crop, latent precompute, dataset
+  models/         interface.py (the seam), dit.py (from scratch), sd15.py (LoRA),
+                  encoders.py (shared VAE + CLIP), registry.py (load by name)
+  diffusion/      flow.py (rectified flow), sampler.py (Euler + DDIM, CFG)
+  training/       Lightning modules, EMA, sample-grid callback
+  eval/           CLIP score
+  pipeline.py     caption → image, model-agnostic
+scripts/          prepare_data.py, train.py, sample.py, plot_curves.py
+tests/            oracle tests for the samplers
+app.py            Gradio: generate + side-by-side compare
+```
+
