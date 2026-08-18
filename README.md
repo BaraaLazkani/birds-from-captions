@@ -49,3 +49,51 @@ only thing that differs is the denoiser.
 | **Bounding-box crop** | CUB birds are often small in cluttered frames. Cropping so the bird fills ~75% of the frame (StackGAN convention) stops a small model wasting capacity on branches and sky. |
 | **QK-norm, EMA, logit-normal timesteps** | Cheap, standard, and each worth more than they cost: bounded attention logits in bf16, cleaner samples, and training effort spent mid-trajectory where the task is hard. |
 
+## Setup
+
+Requires PyTorch with Blackwell (`sm_120`) support:
+
+```bash
+pip install diffusers transformers accelerate peft gradio tensorboard
+```
+
+> On a shared venv holding a torch nightly, run `pip install --dry-run ...` first
+> and confirm `torch` is **not** in the install list — a stable wheel without
+> `sm_120` will silently break the GPU.
+
+## Usage
+
+```bash
+# 1. Download CUB and build the latent caches (~35 min, one time)
+python scripts/prepare_data.py
+
+# 2a. Fine-tune SD 1.5 with LoRA
+python scripts/train.py --config-name train_lora
+
+# 2b. Train the DiT from scratch
+python scripts/train.py --config-name train_dit
+
+#     ...but first, the correctness gate: memorise 10 images.
+#     If this does not converge, there is a bug. Find it here, not after 6 hours.
+python scripts/train.py --config-name train_dit overfit=10 run_name=overfit_check
+
+# 3. Watch training (all local — no wandb)
+tensorboard --logdir logs/
+python scripts/plot_curves.py logs/dit_small     # static PNGs for the README
+
+# 4. Generate
+python scripts/sample.py model_kind=sd15 prompt="a small blue bird with a white belly"
+python scripts/sample.py model_kind=dit checkpoint=checkpoints/dit_small/last.ckpt
+python scripts/sample.py mode=sweep_attribute    # does one changed word change the image?
+python scripts/sample.py mode=sweep_guidance     # find the usable CFG range (3.0 here)
+
+# 5. GUI
+python app.py
+```
+
+Everything is Hydra-configured; any value can be overridden on the command line:
+
+```bash
+python scripts/train.py --config-name train_dit model=dit_base data.batch_size=16
+```
+
