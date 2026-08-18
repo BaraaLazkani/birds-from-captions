@@ -826,5 +826,234 @@ The general lesson is that any fixed preview setting will eventually mislead you
 about a generative training run, because the model's optimal inference
 configuration is itself a moving target.
 
+% =====================  STEP 13  =====================
+\step{Step 13: Evaluation and Comparison}
+\label{sec:eval}
+
+\subsection{Attribute control --- the controlled experiment}
+\label{sec:attr}
+
+CUB permits an unusually clean test of text conditioning. Two captions are
+constructed that differ in exactly one word, and both are rendered from
+\emph{identical} starting noise. Any difference in the output is therefore
+attributable to that single word.
+
+\begin{figure}[htbp]
+\centering
+\begin{subfigure}{0.46\textwidth}
+  \centering
+  \includegraphics[width=\textwidth]{figures/dit_attribute_sweep_cfg3.jpg}
+  \caption{From-scratch DiT, $w=3.0$}
+\end{subfigure}\hfill
+\begin{subfigure}{0.46\textwidth}
+  \centering
+  \includegraphics[width=\textwidth]{figures/lora_attribute_sweep.jpg}
+  \caption{SD 1.5 + LoRA, $w=7.5$}
+\end{subfigure}
+\caption{Attribute control. Each row is one minimal caption pair. Rows, top to
+bottom: red versus blue belly; grey versus black head; long thin versus short
+thick bill; completely white versus completely black bird on water.}
+\label{fig:attr}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{Attribute control results. The from-scratch model changes the intended
+attribute in every pair; the fine-tuned model succeeds in roughly half.}
+\begin{tabularx}{0.95\textwidth}{@{}Xccl@{}}
+\toprule
+\textbf{Caption pair (differing word in bold)} & \textbf{DiT} & \textbf{LoRA} & \textbf{Note} \\
+\midrule
+\textbf{red} vs \textbf{blue} belly, black wings & \textcolor{good}{yes} & \textcolor{good}{yes} & both correct \\
+yellow bird, \textbf{grey} vs \textbf{black} head & \textcolor{good}{yes} & \textcolor{bad}{no} & LoRA renders a yellow head \\
+very \textbf{long thin} vs \textbf{short thick} bill & \textcolor{good}{yes} & \textcolor{bad}{no} & LoRA ignores bill geometry \\
+completely \textbf{white} vs \textbf{black} bird on water & \textcolor{good}{yes} & \textcolor{good}{yes} & both correct \\
+\midrule
+\textbf{Total} & $\mathbf{4/4}$ & $2/4$ & \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{CLIP score}
+
+For a quantitative measure of caption alignment we computed CLIP score --- the
+cosine similarity between CLIP embeddings of the generated image and its prompt
+--- over 24 held-out validation captions. Crucially, the scoring model is
+\textbf{CLIP ViT-B/16, deliberately different from the ViT-L/14 that conditions
+the generators}. Scoring with the same encoder that produced the conditioning
+would allow a model to score well merely by satisfying that encoder's
+idiosyncrasies.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.82\textwidth, height=6.2cm,
+  ybar, bar width=15pt,
+  symbolic x coords={SD 1.5 stock, SD 1.5 + LoRA, Scratch DiT},
+  xtick=data, xticklabel style={font=\small},
+  ylabel={CLIP score}, ymin=0.26, ymax=0.325,
+  legend pos=north east, legend cell align=left,
+  grid=major, grid style={line width=0.2pt, draw=line},
+  nodes near coords, nodes near coords style={font=\tiny},
+  every node near coord/.append style={/pgf/number format/fixed, /pgf/number format/precision=4},
+]
+\addplot[fill=blue!40, draw=blue!60] coordinates {(SD 1.5 stock,0.3029) (SD 1.5 + LoRA,0.3015) (Scratch DiT,0.2871)};
+\addlegendentry{$w=3.0$}
+\addplot[fill=accent!60, draw=accent] coordinates {(SD 1.5 stock,0.3053) (SD 1.5 + LoRA,0.3099) (Scratch DiT,0.2920)};
+\addlegendentry{$w=7.5$}
+\end{axis}
+\end{tikzpicture}
+\caption{CLIP score over 24 held-out validation captions, at two guidance
+scales. The fine-tuned model achieves the highest score, but only at Stable
+Diffusion's native guidance.}
+\label{fig:clip}
+\end{figure}
+
+\begin{lesson}{A caveat about the metric}
+CLIP score ranked \emph{every} model higher at $w=7.5$ than at $w=3.0$ ---
+including the from-scratch model, whose output at $7.5$ is visibly posterised
+(Figure~\ref{fig:cfg}). The metric rewards prompt saturation more than human
+judgement does. It is a useful number, not a verdict, which is why the sample
+grids are presented alongside it throughout this report.
+\end{lesson}
+
+\subsection{Side-by-side comparison}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/model_comparison_cfg75.jpg}
+\caption{The same six captions and the same starting noise through all three
+models. Top: stock Stable Diffusion 1.5. Middle: with the CUB LoRA. Bottom: the
+from-scratch transformer. The fine-tuned row is visibly the most photographic;
+the from-scratch row is softer but tracks the captions more literally.}
+\label{fig:cmp}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/dit_cfg3_heldout.jpg}
+\caption{From-scratch model at $w=3.0$, 40 steps, on twelve \emph{held-out
+validation captions} --- not prompts selected to flatter the model. Roughly ten
+of the twelve are recognisable birds matching their description. The fourth
+image in the top row is a clear failure: leaf-litter texture with no discernible
+bird.}
+\label{fig:heldout}
+\end{figure}
+
+\subsection{Interpretation}
+
+\begin{finding}{The result is a trade-off, not a winner}
+The \textbf{fine-tuned model wins on image quality}: sharper, photographic, at
+twice the resolution, with the best CLIP score. This is unsurprising for 860
+million pretrained parameters adapted with 3.19 million more.
+
+The \textbf{from-scratch model wins on caption fidelity}, changing the correct
+attribute in four of four controlled tests against roughly two of four.
+
+The explanation lies in what each model knows. Stable Diffusion carries a
+powerful prior learned from hundreds of millions of general images, and that
+prior \emph{overrides} fine caption detail: asked for a yellow bird with a black
+head, it produces the yellow bird its prior finds most plausible. The
+from-scratch model has no such prior --- CUB is the only visual world it has ever
+seen --- so it has nothing to fall back on and follows the caption literally.
+\end{finding}
+
+% =====================  STEP 14  =====================
+\step{Step 14: The Application}
+
+To make both models usable and comparable interactively, a graphical application
+was built with Gradio. It exposes both models behind the shared interface of
+Section~\ref{sec:arch-ref}, loading only one denoiser into video memory at a time
+--- 8\,GB cannot hold all three simultaneously.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_1_nothing_Done_yet.jpg}
+\caption{The Generate tab on startup. The caption box accepts free text, with
+example prompts below it. The right panel selects the model and the number of
+images; the strip beneath controls sampler steps, guidance scale and seed.}
+\label{fig:app1}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_2_dropdown_of_models.jpg}
+\caption{The model selector. All three models are exposed --- stock Stable
+Diffusion 1.5 as an untouched baseline, the LoRA fine-tune, and the from-scratch
+transformer --- so that the baseline is always available for reference.}
+\label{fig:app2}
+\end{figure}
+
+\subsection{What to set, and why}
+
+The single most important thing a user must know is that \textbf{the correct
+guidance scale differs per model}, for the reason established in
+Section~\ref{sec:cfg}. The interface default of 4 is wrong for both.
+
+\begin{table}[htbp]
+\centering
+\caption{Recommended configuration per model.}
+\begin{tabularx}{\textwidth}{@{}lcccX@{}}
+\toprule
+\textbf{Model} & \textbf{Guidance} & \textbf{Steps} & \textbf{Images} & \textbf{Reason} \\
+\midrule
+SD 1.5 (stock) & $7.5$ & 30 & 2--4 & Native operating point of the pretrained model. \\
+SD 1.5 + LoRA & $7.5$ & 30 & 2--4 & Adapters do not change the guidance response. \\
+Scratch DiT & $\mathbf{3.0}$ & 40 & 4--8 & Measured optimum; above $4$ it over-saturates. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Two further points of guidance follow from the architecture rather than taste.
+The \textbf{image count must be kept low for the Stable Diffusion variants},
+because classifier-free guidance doubles the batch internally: requesting eight
+images at 512 pixels means sixteen forward passes through an 860-million
+parameter network, which exhausts 8\,GB. The from-scratch model operates at 256
+pixels and is far smaller, so eight is comfortable there.
+
+The \textbf{seed should be held fixed when comparing models}. Identical seeds
+give identical starting noise, which is precisely what makes the Compare tab a
+controlled experiment rather than an anecdote.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_3_SD_results.jpg}
+\caption{Stock Stable Diffusion 1.5. The images are photorealistic but generic:
+the model draws on a broad prior of what birds look like rather than on the CUB
+distribution.}
+\label{fig:app3}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_4_SD_Fine_tuned_results.jpg}
+\caption{The LoRA fine-tune on the same caption. The photographic character has
+shifted noticeably toward CUB's own aesthetic --- field-guide framing, shallow
+depth of field, natural perches.}
+\label{fig:app4}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_5_from_Scratch_results.jpg}
+\caption{The from-scratch transformer at its correct settings: guidance $3$, 40
+steps, four images. Every sample shows the requested bright red body with black
+wings. Compare the consistency of attribute adherence here against
+Figure~\ref{fig:app3}.}
+\label{fig:app5}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{app_photos/Screenshot_6_Compare_Results.jpg}
+\caption{The Compare tab, which is the reason the shared-latent-space design was
+adopted. One caption and one seed are pushed through all three models
+simultaneously. Because the text encoder, the noise, the sampler and the decoder
+are identical across the three panels, the differences are attributable to the
+denoiser alone.}
+\label{fig:app6}
+\end{figure}
+
 
 \end{document}
