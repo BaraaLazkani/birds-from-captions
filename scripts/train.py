@@ -133,7 +133,9 @@ def main(cfg: DictConfig) -> None:
     callbacks = [
         ModelCheckpoint(
             dirpath=run_dir,
-            filename="{epoch:04d}-{val_loss:.4f}",
+            # The metric is logged as "val/loss"; referencing "val_loss" here
+            # silently formats as 0.0000 (ranking still uses the real value).
+            filename="{epoch:04d}-{val/loss:.4f}",
             monitor="val/loss",
             mode="min",
             save_top_k=cfg.checkpoint.save_top_k,
