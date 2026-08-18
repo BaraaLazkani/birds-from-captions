@@ -404,5 +404,156 @@ expected of a lossy autoencoder.}
 \label{fig:recon}
 \end{figure}
 
+% =====================  STEP 6  =====================
+\step{Step 6: Designing the From-Scratch Diffusion Transformer}
+
+This is the model the project exists to build. It operates on the shared latent
+space, patchifies a $4\times32\times32$ latent into 256 tokens, and processes
+them through twelve transformer blocks.
+
+\subsection{Architecture}
+
+\begin{table}[htbp]
+\centering
+\caption{Configuration of the from-scratch diffusion transformer.}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Total parameters & $55.6$ million \\
+Model width $d$ & 512 \\
+Depth & 12 blocks \\
+Attention heads & 8 (head dimension 64) \\
+Patch size & 2 latent cells $\rightarrow$ 256 tokens \\
+Text conditioning & cross-attention over 77 CLIP tokens (768-dim) \\
+Timestep conditioning & adaLN-single \\
+Normalisation & RMSNorm on queries and keys \\
+Position encoding & fixed 2-D sine-cosine \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  op/.style={draw=line, fill=soft, rounded corners=2pt, minimum width=3.1cm, minimum height=0.62cm, align=center},
+  att/.style={op, fill=accent!14, draw=accent!60},
+  mod/.style={op, fill=blue!10, draw=blue!40},
+  ar/.style={-{Stealth[length=2mm]}, draw=ink}
+]
+\node[op]  (in)  at (0,0)     {token stream $x$};
+\node[mod] (n1)  at (0,-0.95) {LayerNorm $\rightarrow$ scale, shift};
+\node[att] (sa)  at (0,-1.9)  {\textbf{self-attention}\\{\tiny how do patches relate?}};
+\node[op]  (r1)  at (0,-3.0)  {$+$ residual (gated)};
+\node[mod] (n2)  at (0,-3.95) {LayerNorm};
+\node[att] (ca)  at (0,-4.9)  {\textbf{cross-attention}\\{\tiny what did the caption ask for?}};
+\node[op]  (r2)  at (0,-6.0)  {$+$ residual};
+\node[mod] (n3)  at (0,-6.95) {LayerNorm $\rightarrow$ scale, shift};
+\node[att] (mlp) at (0,-7.9)  {\textbf{MLP} (ratio 4)};
+\node[op]  (r3)  at (0,-9.0)  {$+$ residual (gated)};
+
+\foreach \a/\b in {in/n1, n1/sa, sa/r1, r1/n2, n2/ca, ca/r2, r2/n3, n3/mlp, mlp/r3}
+  \draw[ar] (\a) -- (\b);
+
+\node[op, fill=blue!10, draw=blue!40, minimum width=2.3cm] (t) at (-4.3,-3.95) {timestep $t$\\adaLN-single};
+\draw[ar, dashed, blue!60] (t) -- (n1.west);
+\draw[ar, dashed, blue!60] (t) -- (n3.west);
+\node[op, fill=accent!14, draw=accent!60, minimum width=2.3cm] (c) at (4.3,-4.9) {CLIP tokens\\$77\times768$};
+\draw[ar, dashed, accent] (c) -- (ca.east);
+\node[font=\scriptsize, align=left, text width=3.4cm] at (4.6,-7.6)
+  {$\times\,12$ blocks\\then unpatchify to\\$4\times32\times32$};
+\end{tikzpicture}
+\caption{One block of the from-scratch diffusion transformer. Self-attention
+relates image patches to one another; cross-attention injects the caption; the
+MLP performs per-token processing. The timestep modulates the block through
+adaptive layer normalisation, shown dashed in blue.}
+\label{fig:block}
+\end{figure}
+
+\subsection{Three load-bearing design decisions}
+
+\textbf{Cross-attention rather than pooled conditioning.} The computationally
+cheaper way to condition a diffusion transformer is to compress the caption into
+a single vector and feed it through adaptive normalisation. For this dataset
+that would be actively wrong. A caption such as ``this bird has a red belly and
+black wings'' would collapse into an averaged notion of ``bird'', and the model
+could never learn to place the red on the belly rather than the wings. Attending
+over all 77 token embeddings is what makes per-attribute control possible, and
+Section~\ref{sec:attr} demonstrates that it works.
+
+\textbf{adaLN-single.} The standard diffusion transformer gives every block its
+own six-way modulation network, costing $6d^2$ parameters per block. At $d=512$
+and depth 12 that is 19 million parameters --- more than a third of this model
+--- spent on timestep conditioning alone. Following PixArt-$\alpha$, we use one
+shared modulation network plus a small learned per-block offset table of $6d$
+parameters, recovering that capacity for actual modelling.
+
+\textbf{Query-key normalisation.} Attention logits in a network trained from
+scratch in 16-bit precision can grow until the softmax saturates and gradients
+vanish. Applying RMSNorm to queries and keys before the attention product bounds
+them. It is now standard practice in SD3 and Flux, and costs almost nothing.
+
+A fourth detail is worth recording because it affects training stability: the
+output projection of the final layer is initialised to zero. The network
+therefore begins as an exact identity function on its residual stream, and each
+block learns how much to contribute rather than starting from a random
+perturbation.
+
+% =====================  STEP 7  =====================
+\step{Step 7: The Training Objective --- Rectified Flow}
+
+Rather than the discrete noise schedule of denoising diffusion probabilistic
+models, we adopted \textbf{rectified flow matching}, the formulation used by
+SD3, Flux and SANA.
+
+The construction is a straight line between data and noise. For a clean latent
+$x_0$ and Gaussian noise $\varepsilon \sim \mathcal{N}(0, I)$, define
+\begin{equation}
+x_t = (1-t)\,x_0 + t\,\varepsilon, \qquad t \in [0,1].
+\end{equation}
+Differentiating with respect to $t$ gives a velocity that does not depend on $t$
+at all:
+\begin{equation}
+v = \frac{\mathrm{d}x_t}{\mathrm{d}t} = \varepsilon - x_0 .
+\end{equation}
+The network $v_\theta$ is trained by plain mean-squared error against this
+target,
+\begin{equation}
+\mathcal{L} = \mathbb{E}_{x_0,\varepsilon,t}\big\lVert v_\theta(x_t, t, c) - (\varepsilon - x_0) \big\rVert_2^2 ,
+\end{equation}
+where $c$ is the caption embedding. Sampling is then ordinary numerical
+integration of the resulting ordinary differential equation from $t=1$ (noise)
+back to $t=0$ (data).
+
+This choice has a strong practical justification beyond fashion. There is no
+beta schedule, no cumulative-alpha table and no posterior variance to derive,
+which removes most of the places where a hand-written diffusion implementation
+goes subtly wrong. Because the trajectories are straight, Euler integration is
+\emph{exact} for a perfect model --- a property we exploited as a correctness
+test in Section~\ref{sec:sampler}.
+
+\subsection{Timestep sampling}
+
+Rather than drawing $t$ uniformly, we sample it from a logit-normal
+distribution, $t = \sigma(z)$ with $z \sim \mathcal{N}(0,1)$. Uniform sampling
+spends much of its budget near $t=0$ and $t=1$, where the task is nearly trivial
+--- an almost-clean latent, or almost-pure noise. The logit-normal distribution
+concentrates samples in the middle of the trajectory where the task is genuinely
+hard. Empirically, $83.5\%$ of logit-normal samples fall in $[0.2, 0.8]$ against
+$60.2\%$ for uniform.
+
+\subsection{Classifier-free guidance}
+
+To make the model steerable, $10\%$ of captions are replaced during training by
+the embedding of the empty string. At sampling time the conditional and
+unconditional predictions are extrapolated apart,
+\begin{equation}
+\tilde{v} = v_\theta(x_t, t, \varnothing) + w \big( v_\theta(x_t, t, c) - v_\theta(x_t, t, \varnothing) \big),
+\end{equation}
+where $w$ is the guidance scale. Section~\ref{sec:cfg} shows that the correct
+value of $w$ is not a constant --- it changes as the model trains, a finding
+that initially looked like a training failure.
+
 
 \end{document}
