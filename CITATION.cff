@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Birds from Captions: A Diffusion Transformer Trained from Scratch on CUB-200-2011"
+abstract: >-
+  A text-to-image system comparing a 55.6M-parameter diffusion transformer
+  trained from scratch with a rectified flow objective against a LoRA
+  fine-tune of Stable Diffusion 1.5, over a shared latent space, trained
+  entirely on a single 8 GB laptop GPU.
+type: software
+authors:
+  - family-names: Lazkani
+    given-names: Baraa
+    email: lazkani.baraa.official@gmail.com
+  - family-names: Yehia
+    given-names: Humam
+keywords:
+  - diffusion-models
+  - diffusion-transformer
+  - rectified-flow
+  - text-to-image
+  - lora
+  - generative-ai
+  - pytorch
+license: MIT
+repository-code: "https://github.com/BaraaLazkani/birds-from-captions"
+year: 2026
