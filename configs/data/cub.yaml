@@ -1,0 +1,34 @@
+# CUB-200-2011 (Caltech-UCSD Birds) with Reed et al. (2016) captions.
+#   11,788 images x 200 species x 10 captions = 117,880 image-text pairs.
+name: cub
+
+# Archives are downloaded and extracted here; latent caches live under cache_dir.
+root: ./datasets
+cache_dir: ./datasets/cache
+
+resolution: 256
+
+# Square crop around the bird's bounding box, sized so the bird fills roughly
+# this fraction of the frame (StackGAN/AttnGAN convention). CUB birds are often
+# small in cluttered scenes, and a small generative model should not spend its
+# capacity modelling branches and sky.
+object_ratio: 0.75
+
+# by_image: hold out 5% of images across all species (default -- maximises
+#           training data, which matters most at 12k images).
+# by_class: hold out whole species for the stricter "unseen bird" protocol.
+split_mode: by_image
+val_fraction: 0.05
+n_val_classes: 50
+seed: 42
+
+# Augmentation. Both are effectively free: the flipped latent is precomputed,
+# and re-drawing the caption each epoch is what turns 11.8k images into 118k pairs.
+random_flip: true
+random_caption: true
+
+# Dataloader
+batch_size: 64
+num_workers: 8
+pin_memory: true
+prefetch_factor: 4
