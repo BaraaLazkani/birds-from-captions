@@ -1,0 +1,3 @@
+tensorboard: true
+csv: false
+save_dir: ./logs
