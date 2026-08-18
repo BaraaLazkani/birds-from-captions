@@ -264,9 +264,9 @@ Neural Networks course, Faculty of Engineering, Manara University.
 
 Code released under the [MIT License](LICENSE).
 
-The **CUB-200-2011 dataset is not covered by this license** — it is provided by Caltech for
-non-commercial research and educational use only. The caption annotations are from Reed et al.
-(2016). Stable Diffusion 1.5 weights are subject to the CreativeML Open RAIL-M license.
+Third-party assets — the CUB-200-2011 dataset, its caption annotations, and the Stable
+Diffusion 1.5 weights — are **not** covered by that license. See [NOTICE.md](NOTICE.md).
+Neither the dataset nor the pretrained weights are redistributed here.
 
 ## Acknowledgements
 
