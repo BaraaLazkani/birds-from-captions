@@ -1,0 +1,12 @@
+# LoRA adapters on SD 1.5's attention projections.
+name: sd15_lora
+
+rank: 16
+alpha: 16              # alpha == rank -> unit scaling
+dropout: 0.0
+latent_size: 64        # 512px, SD 1.5's native resolution
+gradient_checkpointing: true   # ~30% slower, large VRAM saving
+
+# Dtype of the frozen base UNet. bfloat16 keeps one precision regime across the
+# whole project; adapters are promoted to fp32 regardless.
+unet_dtype: bfloat16
