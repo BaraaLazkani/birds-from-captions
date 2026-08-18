@@ -1,0 +1,50 @@
+# Generate images from the command line.
+#
+#   python scripts/sample.py prompt="a small blue bird with a white belly"
+#   python scripts/sample.py model_kind=dit checkpoint=checkpoints/dit_small/last.ckpt
+#   python scripts/sample.py mode=sweep_guidance
+#   python scripts/sample.py mode=sweep_attribute
+#
+# NOTE: _self_ comes LAST so values written in *this* file override the config
+# groups above. With _self_ first, Hydra merges this file and then lets the
+# groups overwrite it -- which silently discarded every data.* override here.
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+# model_kind: sd15 | sd15_lora | dit   (named model_kind because plain "model" collides with the configs/model/ Hydra group)
+model_kind: sd15
+checkpoint: null                          # required for model_kind=dit
+lora_path: ./checkpoints/sd15_lora_cub/lora.safetensors
+
+# single    -- render `prompt` `n_images` times
+# sweep_guidance  -- one prompt across a range of CFG scales
+# sweep_attribute -- minimal caption pairs, to check text conditioning bites
+mode: single
+
+prompt: "this bird has a bright red belly with black wings and a short pointed beak"
+n_images: 4
+
+steps: 30
+guidance_scale: 4.0
+seed: 1234
+
+guidance_values: [1.0, 2.0, 3.0, 4.0, 6.0, 8.0]
+
+# Each pair differs in exactly one attribute word. A model with working
+# cross-attention changes that attribute and leaves the rest of the bird alone;
+# one with broken conditioning produces two unrelated birds, or the same bird twice.
+attribute_pairs:
+  - ["this bird has a bright red belly with black wings", "this bird has a bright blue belly with black wings"]
+  - ["a small yellow bird with a grey head", "a small yellow bird with a black head"]
+  - ["a bird with a very long thin bill", "a bird with a very short thick bill"]
+  - ["a completely white bird standing on water", "a completely black bird standing on water"]
+
+out_dir: ./outputs/samples
+device: cuda
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
