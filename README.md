@@ -256,7 +256,7 @@ not statistically robust.
 
 ## Authors
 
-**Baraa Lazkani** · **Humam Yehia**
+**Baraa Lazkani** · **Humam Yehi**
 
 Neural Networks course, Faculty of Engineering, Manara University.
 
